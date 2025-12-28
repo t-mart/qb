@@ -1,8 +1,8 @@
 # sb
 
-`sb` is a CLI for managing qBittorrent instances via their web UIs. It is handy
-for bulk operations, especially those that need to be coordinated across
-multiple instances.
+`sb` is a CLI application for managing seedboxes. At least, my seedboxes and my
+setup. Some consideration has been given to making it more generally useful, but
+no guarantees.
 
 ## Installation
 
@@ -15,12 +15,12 @@ uv tool install git+https://github.com/t-mart/sb.git
 Config in toml format is stored in `~/.config/sb/config.toml`.
 
 ```toml
-[clients.aClient]
+[qb.clients.aClient]
 host = "http://localhost:8080"
 username = "admin"
 password = "adminadmin"
 
-[clients.bClient]
+[qb.clients.bClient]
 host = "http://otherhost:8080"
 username = "user"
 password = "pass"
