@@ -1,12 +1,17 @@
+from sb.diff import print_string_diff
+from sb.category import Category
 from pathlib import Path
 from typing import get_args, TypeVar, Callable, Any
 import json
 from functools import cache
+import shutil
 
 import click
 from qbittorrentapi.torrents import TorrentStatusesT
 
 from sb.config import Config
+from sb.norm import iter_variants
+from sb.fastresume import FastResume
 from sb.torrent import Torrent, MissingTorrentFileException, TorrentException
 from sb.client import (
     QBittorrentClient,
@@ -521,22 +526,174 @@ def linkup(file_or_dir_path: Path, dry_run: bool, min_size: int, interactive: bo
     raise NotImplementedError("linkup command is not yet implemented.")
 
 
-@sb.command()
-@click.argument(
-    "torrent_dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+@sb.command("fix-norm")
+@click.option(
+    "--dry-run", is_flag=True, help="Show what would be done without making changes"
 )
-@click.argument(
-    "download_path",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    required=False,
+@click.option(
+    "--interactive", is_flag=True, default=False, help="Prompt before fixing each file"
 )
-def fix_bad_normalization(torrent_dir: Path):
+@click.option(
+    "-c",
+    "--category-filter",
+    default=None,
+    help="Only select torrents with this category. Subcategories are included by parent categories.",
+)
+def fix_bad_normalization(
+    dry_run: bool, interactive: bool, category_filter: str | None
+):
     """
-    Fix torrents in TORRENT_DIR that have bad Unicode normalization in file names.
+    From torrents in config's `local_qb_config_dir`, fix downloaded files' paths that
+    have errantly been Unicode-normalized by other software (e.g. syncthing).
+    """
+    config = Config.load_from_file()
 
-    This is useful for fixing torrents created on macOS, which uses NFD normalization,
-    when the files are stored on a filesystem that uses NFC normalization, such as
-    most Linux filesystems.
-    """
-    raise NotImplementedError("fix_bad_normalization command is not yet implemented.")
+    if category_filter is not None:
+        only_category = Category.from_string(category_filter)
+
+    for bt_backup_tuple in config.qb_bt_backup_torrent_tuples():
+        fast_resume = FastResume.from_path(bt_backup_tuple.fastresume_path)
+        category = (
+            Category.from_string(fast_resume.category) if fast_resume.category else None
+        )
+
+        # skip if:
+        # - category filter is set, and the fast resume category is None
+        # - category filter is set, and the fast resume category is not a subcategory of it
+        if category_filter is not None and (
+            category is None or not category.is_subcategory_of(only_category)
+        ):
+            continue
+
+        try:
+            torrent = Torrent.from_path(bt_backup_tuple.torrent_path)
+        except TorrentException as e:
+            click.secho(f"Failed to load torrent: {e}", err=True, fg="red")
+            continue
+
+        printed_torrent = False
+
+        def print_torrent_once():
+            nonlocal printed_torrent
+            if not printed_torrent:
+                printed_torrent = True
+                click.secho(f"{bt_backup_tuple.torrent_path}: {torrent.name}", err=True)
+
+        save_path = fast_resume.save_path
+
+        torrent_fixed = True
+
+        for file in sorted(torrent.files, key=lambda f: f.path):
+            # This is weird, but some quirk in my stack names files on disk without LTR
+            # markers even though the torrent specifies them. So, just strip them out
+            # for the purposes of this check.
+            file_path = Path(*[part.replace("\u200e", "") for part in file.path.parts])
+
+            expected_path = save_path / file_path
+
+            fixed = False
+
+            if expected_path.is_file():
+                fixed = True
+
+            for normed_file_path in iter_variants(file_path):
+                normed_full_path = save_path / normed_file_path
+                if not normed_full_path.is_file():
+                    continue
+
+                print_torrent_once()
+
+                if fixed:
+                    click.secho(
+                        "\tVariant found even though expected file exists",
+                        err=True,
+                    )
+                    print_string_diff(
+                        str(expected_path),
+                        str(normed_full_path),
+                        headings=(
+                            "\tExpected",
+                            "\tFound   ",
+                        ),
+                        file=click.get_text_stream("stderr"),
+                    )
+                    if dry_run:
+                        click.secho("\tDry run, not deleting", err=True)
+                        continue
+                    if interactive:
+                        confirm = click.confirm("\tDelete variant?")
+                        if not confirm:
+                            click.secho("\tSkipping", err=True)
+                            continue
+                    normed_full_path.unlink()
+                    click.secho("\tDeleted", err=True, fg="green")
+
+                else:
+                    click.secho(
+                        "\tVariant found that can fix missing file",
+                        err=True,
+                    )
+                    print_string_diff(
+                        str(expected_path),
+                        str(normed_full_path),
+                        headings=(
+                            "\tExpected",
+                            "\tFound   ",
+                        ),
+                        file=click.get_text_stream("stderr"),
+                    )
+
+                    if dry_run:
+                        click.secho("\tDry run, not fixing", err=True)
+                        continue
+                    if interactive:
+                        confirm = click.confirm("\tRename to expected?")
+                        if not confirm:
+                            click.secho("\tSkipping", err=True)
+                            continue
+
+                    expected_path.parent.mkdir(parents=True, exist_ok=True)
+                    normed_full_path.rename(expected_path)
+                    fixed = True
+                    click.secho("\t✅ Fixed", err=True, fg="green")
+
+            if not fixed:
+                print_torrent_once()
+                click.secho(
+                    f"\tExpected path {expected_path} not found nor any variant",
+                    err=True,
+                    fg="red",
+                )
+                torrent_fixed = False
+
+        if torrent_fixed:
+            # now we can go through any variant directories and remove them
+            torrent_root = save_path / Path(
+                *[part.replace("\u200e", "") for part in torrent.name.parts]
+            )
+
+            for variant_root in iter_variants(torrent_root):
+                if variant_root == torrent_root:
+                    continue
+                if not variant_root.exists():
+                    continue
+
+                if not dry_run:
+                    if interactive:
+                        confirm = click.confirm(
+                            f"\tDelete variant directory {variant_root}?"
+                        )
+                        if not confirm:
+                            click.secho("\tSkipping", err=True)
+                            continue
+                    shutil.rmtree(variant_root)
+                    click.secho(
+                        f"\tDeleted variant directory {variant_root}",
+                        err=True,
+                        fg="green",
+                    )
+                else:
+                    click.secho(
+                        f"\tDry run, would delete variant directory {variant_root}",
+                        err=True,
+                    )

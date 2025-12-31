@@ -48,6 +48,17 @@ class UnsupportedTorrentException(TorrentException):
 
 @dataclass
 class TorrentFile:
+    """
+    Represents a file within a torrent. The paths are relative to the download root.
+
+    Note: I've seen some weirdness around how left-to-right markers (U+200E) are handled
+    in torrent file names. Even though a torrent may specify a file name with such a
+    character, the actual downloaded file may not have it. I'm not sure if this is due
+    to qbittorrent, the filesystem, or something else. Be cautious when comparing file
+    names. (Honestly, it's bad that these characters are in file names at all. This is
+    certainly user error of the torrent author.)
+    """
+
     size: int
     path: Path
 
@@ -73,7 +84,7 @@ class Torrent:
     pieces: list[bytes]
 
     @classmethod
-    def from_path(cls, file_path: Path):
+    def from_path(cls, file_path: Path) -> Torrent:
         torrent_data = bencodepy.decode(file_path.read_bytes())
 
         info: dict = torrent_data.get(b"info")
@@ -91,7 +102,12 @@ class Torrent:
             for i in range(0, len(concatenated_pieces), 20)
         ]
 
-        name = Path(info.get(b"name").decode("utf-8"))
+        try:
+            name = Path(info.get(b"name").decode("utf-8"))
+        except UnicodeDecodeError as ude:
+            raise UnsupportedTorrentException(
+                f'Torrent name "{info.get(b"name")}" is not valid UTF-8: {ude}'
+            ) from ude
         size: int = info.get(b"length", 0)
         piece_length = info.get(b"piece length")
 

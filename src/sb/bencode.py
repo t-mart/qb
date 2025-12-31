@@ -34,7 +34,7 @@ if __name__ == "__main__":
     import bencodepy
     import json
 
-    fastresume_path = Path("foo.fastresume")
+    fastresume_path = Path("/srv/homelab/qb/data/qbittorrent/qBittorrent/BT_backup/d52bbb62868f543223a0e9c2bc6cb7eb4a816aff.fastresume")
 
     with fastresume_path.open("rb") as f:
         bencoded_data = bencodepy.decode(f.read())
