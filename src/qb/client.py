@@ -107,7 +107,7 @@ class QBittorrentClient:
 
         deadline = time.monotonic() + timeout
         while True:
-            if self.client.torrents_info(hashes=expected_hash):
+            if self.client.torrents_info(torrent_hashes=expected_hash):
                 return True
             if time.monotonic() >= deadline:
                 return False
@@ -130,7 +130,9 @@ class QBittorrentClient:
             status_filter = None
 
         torrents = self.client.torrents_info(
-            category=category_filter, status_filter=status_filter, hashes=hashes
+            category=category_filter,
+            status_filter=status_filter,
+            torrent_hashes=hashes,
         )
 
         if stopped_complete:
@@ -146,7 +148,7 @@ class QBittorrentClient:
 
         Note that this does not wait for the recheck to complete.
         """
-        self.client.torrents_recheck(hashes=hashes)
+        self.client.torrents_recheck(torrent_hashes=hashes)
 
     def export(self, torrent_hash: str) -> bytes:
         """Export the raw torrent data for the torrent with the given hash."""
@@ -154,4 +156,4 @@ class QBittorrentClient:
 
     def start(self, hashes: HashList):
         """Start the torrents with the given hashes."""
-        self.client.torrents_start(hashes=hashes)
+        self.client.torrents_start(torrent_hashes=hashes)

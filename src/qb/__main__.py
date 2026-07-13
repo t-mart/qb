@@ -58,6 +58,11 @@ def torrent_path_argument(f: F) -> F:
     help="Delete torrent file after successfully adding or being skipped due to already existing by all clients",
 )
 @click.option(
+    "--recheck/--no-recheck",
+    default=True,
+    help="Recheck added torrents on the destination (default: recheck)",
+)
+@click.option(
     "--dry-run", is_flag=True, help="Show what would be done without making changes"
 )
 def add(
@@ -65,6 +70,7 @@ def add(
     torrent_file_or_dir_path: tuple[Path],
     category: str | None,
     delete_after: bool,
+    recheck: bool,
     dry_run: bool,
 ):
     """
@@ -129,7 +135,7 @@ def add(
                         err=True,
                     )
 
-            if not dry_run:
+            if not dry_run and recheck:
                 qb_client.start_recheck(recheck_hashes)
 
     if delete_after and not dry_run:
@@ -167,6 +173,11 @@ def add(
     help="Only select torrents with this status.",
 )
 @click.option(
+    "--recheck/--no-recheck",
+    default=True,
+    help="Recheck copied torrents on the destination (default: recheck)",
+)
+@click.option(
     "--dry-run", is_flag=True, help="Show what would be done without making changes"
 )
 def cp(
@@ -174,6 +185,7 @@ def cp(
     to_client: str,
     category_filter: str | None,
     status_filter: QBTorrentStatus | None,
+    recheck: bool,
     dry_run: bool,
 ):
     """
@@ -237,7 +249,7 @@ def cp(
                         err=True,
                     )
 
-            if not dry_run:
+            if not dry_run and recheck:
                 to_qb.start_recheck(hashes=recheck_hashes)
 
     from_qb.logout()
