@@ -1,7 +1,7 @@
 [project]
-name = "sb"
+name = "qb"
 version = "0.1.0"
-description = "CLI for driving QBittorrent instances"
+description = "CLI for driving qBittorrent instances"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
@@ -17,4 +17,4 @@ dependencies = [
 package = true
 
 [project.scripts]
-sb = "sb.__main__:sb"
+qb = "qb.__main__:main"

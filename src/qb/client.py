@@ -1,20 +1,21 @@
+import time
 from types import TracebackType
 from qbittorrentapi import Client
+from qbittorrentapi.exceptions import APIConnectionError
 from qbittorrentapi.torrents import TorrentStatusesT, TorrentFilesT
-from pathlib import Path
 from typing import Literal, cast, Iterable, get_args
 
-from sb.config import ClientConfig
+from qb.config import ClientConfig
 
 type AddResponse = Literal["Ok.", "Fails."]
 type HashList = str | Iterable[str] | None
 
 
-type SBTorrentStatus = (
+type QBTorrentStatus = (
     TorrentStatusesT | Literal["stopped_complete"] | Literal["stopped_downloading"]
 )
 # ugh, get_args does not work nicely on Literal unions
-sb_torrent_statuses = list(get_args(TorrentStatusesT)) + [
+qb_torrent_statuses = list(get_args(TorrentStatusesT)) + [
     "stopped_complete",
     "stopped_downloading",
 ]
@@ -24,8 +25,15 @@ class FailedAddException(Exception):
     pass
 
 
+class QBConnectionError(Exception):
+    """Raised when a client cannot be reached."""
+
+    pass
+
+
 class QBittorrentClient:
     def __init__(self, host: str, username: str, password: str):
+        self.host = host
         self.client = Client(host=host, username=username, password=password)
 
     @classmethod
@@ -37,7 +45,14 @@ class QBittorrentClient:
         )
 
     def login(self):
-        self.client.auth_log_in()
+        try:
+            self.client.auth_log_in()
+        except APIConnectionError as e:
+            raise QBConnectionError(
+                f"Could not connect to qBittorrent at {self.host}. "
+                "Check that the URL (including port) in your config is correct "
+                "and that the client is reachable."
+            ) from e
 
     def logout(self):
         self.client.auth_log_out()
@@ -58,7 +73,7 @@ class QBittorrentClient:
         response = cast(
             AddResponse,
             self.client.torrents_add(
-                torrent_files=path_or_data,  # type: ignore
+                torrent_files=path_or_data,
                 category=category,
                 is_paused=True,
             ),
@@ -66,18 +81,42 @@ class QBittorrentClient:
         if response == "Fails.":
             raise FailedAddException("Failed to add torrent.")
 
-    def add_paused_torrent_by_path(self, path: Path, category: str | None):
-        """Add a torrent to the client by file path."""
-        return self._add_paused_torrent(str(path), category)
+    def add_and_wait(
+        self,
+        path_or_data: TorrentFilesT,
+        expected_hash: str,
+        category: str | None,
+        *,
+        timeout: float = 30.0,
+        poll_interval: float = 0.5,
+    ) -> bool:
+        """
+        Add a paused torrent, then block until the client has registered it.
 
-    def add_paused_torrent_by_data(self, data: bytes, category: str | None):
-        """Add a torrent to the client by raw data."""
-        return self._add_paused_torrent(data, category)
+        qBittorrent's add is fire-and-forget: it returns immediately and
+        materializes the torrent asynchronously. Waiting for the hash to appear
+        before we act on it (e.g. rechecking) avoids operating on a torrent the
+        client does not yet know about.
+
+        Returns True if the torrent appeared within `timeout`, False otherwise.
+
+        Raises:
+            - FailedAddException: If the client rejected the add outright.
+        """
+        self._add_paused_torrent(path_or_data, category)
+
+        deadline = time.monotonic() + timeout
+        while True:
+            if self.client.torrents_info(hashes=expected_hash):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(poll_interval)
 
     def list_torrents(
         self,
         *,
-        status_filter: SBTorrentStatus | None = None,
+        status_filter: QBTorrentStatus | None = None,
         category_filter: str | None = None,
         hashes: HashList = None,
     ):
@@ -103,7 +142,7 @@ class QBittorrentClient:
 
     def start_recheck(self, hashes: HashList):
         """
-        Start a recheck for the torrent with the given hash.
+        Start a recheck for the torrents with the given hashes.
 
         Note that this does not wait for the recheck to complete.
         """
@@ -114,5 +153,5 @@ class QBittorrentClient:
         return self.client.torrents_export(torrent_hash=torrent_hash)
 
     def start(self, hashes: HashList):
-        """Start the torrent with the given hash."""
+        """Start the torrents with the given hashes."""
         self.client.torrents_start(hashes=hashes)
