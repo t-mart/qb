@@ -157,3 +157,10 @@ class QBittorrentClient:
     def start(self, hashes: HashList):
         """Start the torrents with the given hashes."""
         self.client.torrents_start(torrent_hashes=hashes)
+
+    def delete(self, hashes: Iterable[str]):
+        """Remove torrents but retain their downloaded files."""
+        hashes = list(hashes)
+        if not hashes:
+            return
+        self.client.torrents_delete(torrent_hashes=hashes, delete_files=False)

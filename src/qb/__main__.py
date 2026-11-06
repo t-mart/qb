@@ -150,36 +150,37 @@ def add(
                 )
 
 
+def copy_options(f: F) -> F:
+    options = (
+        click.argument("from_client", type=str),
+        click.argument("to_client", type=str),
+        click.option(
+            "-c",
+            "--category-filter",
+            default=None,
+            help="Select torrents in this category and its subcategories.",
+        ),
+        click.option(
+            "-s",
+            "--status-filter",
+            type=click.Choice(qb_torrent_statuses),
+            default=None,
+            help="Select torrents with this status.",
+        ),
+        click.option(
+            "--recheck/--no-recheck",
+            default=True,
+            help="Recheck copied torrents on the destination (default: recheck)",
+        ),
+        click.option("--dry-run", is_flag=True, help="Show changes without execution."),
+    )
+    for option in reversed(options):
+        f = option(f)
+    return f
+
+
 @qb.command()
-@click.argument(
-    "from_client",
-    type=str,
-)
-@click.argument(
-    "to_client",
-    type=str,
-)
-@click.option(
-    "-c",
-    "--category-filter",
-    default=None,
-    help="Only select torrents with this category. Subcategories are included by parent categories.",
-)
-@click.option(
-    "-s",
-    "--status-filter",
-    type=click.Choice(qb_torrent_statuses),
-    default=None,
-    help="Only select torrents with this status.",
-)
-@click.option(
-    "--recheck/--no-recheck",
-    default=True,
-    help="Recheck copied torrents on the destination (default: recheck)",
-)
-@click.option(
-    "--dry-run", is_flag=True, help="Show what would be done without making changes"
-)
+@copy_options
 def cp(
     from_client: str,
     to_client: str,
@@ -193,66 +194,151 @@ def cp(
 
     TO_CLIENT may be a single client or many separated by commas.
     """
+    copy_torrents(
+        from_client, to_client, category_filter, status_filter, recheck, dry_run
+    )
+
+
+@qb.command()
+@copy_options
+def sync(
+    from_client: str,
+    to_client: str,
+    category_filter: str | None,
+    status_filter: QBTorrentStatus | None,
+    recheck: bool,
+    dry_run: bool,
+):
+    """Copy torrents from FROM_CLIENT to TO_CLIENT and remove extra target torrents.
+
+    TO_CLIENT accepts one client or multiple clients separated by commas.
+    Filters apply to both clients. Downloaded files remain on the target.
+    """
+    copy_torrents(
+        from_client,
+        to_client,
+        category_filter,
+        status_filter,
+        recheck,
+        dry_run,
+        synchronize=True,
+    )
+
+
+def copy_torrents(
+    from_client: str,
+    to_client: str,
+    category_filter: str | None,
+    status_filter: QBTorrentStatus | None,
+    recheck: bool,
+    dry_run: bool,
+    *,
+    synchronize: bool = False,
+):
     config = Config.load_from_file()
     from_client_config = get_client_config(config, from_client)
     to_client_configs = {
         name: get_client_config(config, name) for name in to_client.split(",")
     }
 
-    from_qb = QBittorrentClient.from_config(from_client_config)
-    from_qb.login()
+    with QBittorrentClient.from_config(from_client_config) as from_qb:
+        from_torrents = from_qb.list_torrents(
+            category_filter=category_filter, status_filter=status_filter
+        )
+        from_torrent_map = {t.hash: t for t in from_torrents}
+        from_hashes = {t.hash for t in from_torrents}
 
-    from_torrents = from_qb.list_torrents(
-        category_filter=category_filter, status_filter=status_filter
-    )
-    from_torrent_map = {t.hash: t for t in from_torrents}
-    from_hashes = {t.hash for t in from_torrents}
+        @cache
+        def get_torrent_data(torrent_hash: str) -> bytes:
+            return from_qb.export(torrent_hash=torrent_hash)
 
-    @cache
-    def get_torrent_data(torrent_hash: str) -> bytes:
-        return from_qb.export(torrent_hash=torrent_hash)
+        for name, config in to_client_configs.items():
+            with QBittorrentClient.from_config(config) as to_qb:
+                action = "Syncing" if synchronize else "Copying"
+                click.echo(
+                    f"{action} torrents from '{from_client}' to '{name}'", err=True
+                )
 
-    for name, config in to_client_configs.items():
-        with QBittorrentClient.from_config(config) as to_qb:
-            click.echo(f"Copying torrents from '{from_client}' to '{name}'", err=True)
+                to_torrents = to_qb.list_torrents()
+                to_hashes = {t.hash for t in to_torrents}
+                missing_hashes = from_hashes - to_hashes
+                recheck_hashes: set[str] = set()
+                copy_failed = False
 
-            to_torrents = to_qb.list_torrents()
-            to_hashes = {t.hash for t in to_torrents}
-            missing_hashes = from_hashes - to_hashes
-            recheck_hashes: set[str] = set()
-
-            for missing_hash in missing_hashes:
-                torrent_data = get_torrent_data(missing_hash)
-                torrent = from_torrent_map[missing_hash]
-                category = torrent.category
-                click.echo(f"\tAdding torrent: {torrent.name}", err=True)
-
-                if dry_run:
-                    click.echo("\t\tℹ️ Dry run, not copying", err=True)
-                    continue
-
-                try:
-                    registered = to_qb.add_and_wait(
-                        torrent_data, missing_hash, category=str(category)
+                if synchronize:
+                    selected_torrents = to_qb.list_torrents(
+                        category_filter=category_filter, status_filter=status_filter
                     )
-                except FailedAddException:
-                    click.echo("\t\t❌ Failed to copy", err=True)
-                    continue
+                    extra_torrents = [
+                        t for t in selected_torrents if t.hash not in from_hashes
+                    ]
 
-                click.echo("\t\t✅ Copied successfully", err=True)
+                for missing_hash in missing_hashes:
+                    torrent_data = get_torrent_data(missing_hash)
+                    torrent = from_torrent_map[missing_hash]
+                    category = torrent.category
+                    click.echo(f"\tAdding torrent: {torrent.name}", err=True)
 
-                if registered:
-                    recheck_hashes.add(missing_hash)
-                else:
-                    click.echo(
-                        "\t\t⚠️ Not registered in time, skipping recheck",
-                        err=True,
+                    if dry_run:
+                        click.echo("\t\tℹ️ Dry run, not copying", err=True)
+                        continue
+
+                    try:
+                        registered = to_qb.add_and_wait(
+                            torrent_data, missing_hash, category=str(category)
+                        )
+                    except FailedAddException:
+                        click.echo("\t\t❌ Failed to copy", err=True)
+                        copy_failed = True
+                        continue
+
+                    click.echo("\t\t✅ Copied successfully", err=True)
+
+                    if registered:
+                        recheck_hashes.add(missing_hash)
+                    else:
+                        copy_failed = True
+                        click.echo(
+                            "\t\t⚠️ Not registered in time, skipping recheck",
+                            err=True,
+                        )
+
+                if not dry_run and recheck:
+                    to_qb.start_recheck(hashes=recheck_hashes)
+
+                if synchronize and not copy_failed:
+                    for torrent in extra_torrents:
+                        action = "Dry run: remove" if dry_run else "Remove"
+                        click.echo(f"\t{action} torrent: {torrent.name}", err=True)
+                    if not dry_run:
+                        to_qb.delete(t.hash for t in extra_torrents)
+
+                summary = [
+                    f"{len(missing_hashes)} to copy"
+                    if dry_run
+                    else f"{len(recheck_hashes)} copied"
+                ]
+                if synchronize:
+                    deleted = 0 if copy_failed else len(extra_torrents)
+                    summary.append(
+                        f"{deleted} to delete" if dry_run else f"{deleted} deleted"
                     )
-
-            if not dry_run and recheck:
-                to_qb.start_recheck(hashes=recheck_hashes)
-
-    from_qb.logout()
+                summary.append(f"{len(from_hashes & to_hashes)} unchanged")
+                if copy_failed:
+                    failed = len(missing_hashes) - len(recheck_hashes)
+                    summary.append(f"{failed} failed or timed out")
+                action = "Sync" if synchronize else "Copy"
+                outcome = (
+                    "dry run" if dry_run else "incomplete" if copy_failed else "complete"
+                )
+                click.echo(
+                    f"{action} {outcome} for '{name}': {', '.join(summary)}.", err=True
+                )
+                if synchronize and copy_failed:
+                    raise click.ClickException(
+                        f"Copy to '{name}' failed or timed out. "
+                        f"Sync did not remove torrents from '{name}'."
+                    )
 
 
 @qb.command()

@@ -126,6 +126,24 @@ Example:
 qb cp aClient bClient
 ```
 
+### `sync`
+
+Copy torrents from FROM_CLIENT to TO_CLIENT, then remove target torrents that
+the source selection does not contain. Downloaded files remain on the target.
+
+Like `cp`, this command preserves source categories and accepts multiple target
+clients separated by commas. It also accepts `--no-recheck` and `--dry-run`.
+
+Category and status filters apply to both clients. Torrents outside the target
+filters remain unchanged. If a copy fails or times out, sync skips deletions
+for that target.
+
+Example:
+
+```sh
+qb sync aClient bClient --category-filter movies --dry-run
+```
+
 ### `ls`
 
 List all torrents in a given qBittorrent instance as JSON. May provide zero or
