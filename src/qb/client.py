@@ -1,9 +1,11 @@
 import time
+from collections.abc import Iterable
 from types import TracebackType
+from typing import Literal, cast, get_args
+
 from qbittorrentapi import Client
 from qbittorrentapi.exceptions import APIConnectionError
-from qbittorrentapi.torrents import TorrentStatusesT, TorrentFilesT
-from typing import Literal, cast, Iterable, get_args
+from qbittorrentapi.torrents import TorrentFilesT, TorrentStatusesT
 
 from qb.config import ClientConfig
 
@@ -12,7 +14,7 @@ type HashList = str | Iterable[str] | None
 
 
 type QBTorrentStatus = (
-    TorrentStatusesT | Literal["stopped_complete"] | Literal["stopped_downloading"]
+    Literal["stopped_complete", "stopped_downloading"] | TorrentStatusesT
 )
 # ugh, get_args does not work nicely on Literal unions
 qb_torrent_statuses = list(get_args(TorrentStatusesT)) + [
@@ -27,8 +29,6 @@ class FailedAddException(Exception):
 
 class QBConnectionError(Exception):
     """Raised when a client cannot be reached."""
-
-    pass
 
 
 class QBittorrentClient:

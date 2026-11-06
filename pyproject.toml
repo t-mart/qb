@@ -16,5 +16,8 @@ dependencies = [
 [tool.uv]
 package = true
 
+[tool.ty.environment]
+python = ".venv"
+
 [project.scripts]
 qb = "qb.__main__:main"

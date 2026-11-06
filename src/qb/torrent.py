@@ -1,6 +1,6 @@
-from pathlib import Path
-from dataclasses import dataclass
 import hashlib
+from dataclasses import dataclass
+from pathlib import Path
 
 import bencodepy
 
@@ -36,10 +36,10 @@ class Torrent:
         infohash_v1 = hashlib.sha1(raw_info_bencoded).digest()
 
         try:
-            name = Path(info.get(b"name").decode("utf-8"))
+            name = Path(info[b"name"].decode("utf-8"))
         except UnicodeDecodeError as ude:
             raise UnsupportedTorrentException(
-                f'Torrent name "{info.get(b"name")}" is not valid UTF-8: {ude}'
+                f'Torrent name "{info[b"name"]}" is not valid UTF-8: {ude}'
             ) from ude
 
         return cls(name=name, infohash_v1=infohash_v1)

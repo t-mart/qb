@@ -1,32 +1,29 @@
-from pathlib import Path
-from typing import TypeVar, Callable, Any
 import json
 import sys
+from collections.abc import Callable
 from functools import cache
+from pathlib import Path
+from typing import Any
 
 import click
 
-from qb.config import Config
-from qb.torrent import Torrent
 from qb.client import (
-    QBittorrentClient,
     FailedAddException,
     QBConnectionError,
+    QBittorrentClient,
     QBTorrentStatus,
     qb_torrent_statuses,
 )
+from qb.config import Config
+from qb.torrent import Torrent
 
 
 @click.group()
 def qb():
     """Seedbox management CLI for driving qBittorrent clients."""
-    pass
 
 
-F = TypeVar("F", bound=Callable[..., Any])
-
-
-def torrent_path_argument(f: F) -> F:
+def torrent_path_argument[F: Callable[..., Any]](f: F) -> F:
     """
     Argument decorator for one or more torrent file or directory paths.
 
@@ -84,8 +81,7 @@ def add(
         if path.is_file():
             torrent_paths.append(path)
         elif path.is_dir():
-            for file in path.glob("**/*.torrent"):
-                torrent_paths.append(file)
+            torrent_paths.extend(path.glob("**/*.torrent"))
 
     add_results: dict[Path, bool] = {path: True for path in torrent_paths}
 
@@ -150,7 +146,7 @@ def add(
                 )
 
 
-def copy_options(f: F) -> F:
+def copy_options[F: Callable[..., Any]](f: F) -> F:
     options = (
         click.argument("from_client", type=str),
         click.argument("to_client", type=str),
@@ -329,7 +325,11 @@ def copy_torrents(
                     summary.append(f"{failed} failed or timed out")
                 action = "Sync" if synchronize else "Copy"
                 outcome = (
-                    "dry run" if dry_run else "incomplete" if copy_failed else "complete"
+                    "dry run"
+                    if dry_run
+                    else "incomplete"
+                    if copy_failed
+                    else "complete"
                 )
                 click.echo(
                     f"{action} {outcome} for '{name}': {', '.join(summary)}.", err=True
